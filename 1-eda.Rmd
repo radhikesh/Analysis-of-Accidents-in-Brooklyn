@@ -1,0 +1,728 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+#loading libraries
+library(tidyverse)
+library(plotly)
+library(readr)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+library(ggmap)
+library(purrr)
+library(gridExtra)
+
+require("knitr")
+opts_knit$set(root.dir = "C:/Users/rranadive/Downloads/nypd")
+```
+
+
+```{r }
+#nypd-accidents data exported from Goodle BigQuery API
+data <- read_csv("data/data_mydata2.csv")
+
+#adding year
+data$year <- year(data$timestamp)
+data$month <- month(data$timestamp)
+data$day <- day(data$timestamp)
+data$hour <- hour(data$timestamp)
+```
+
+```{r}
+#missing data
+NAcol <- which(colSums(is.na(data)) > 0)
+sort(colSums(sapply(data[NAcol], is.na)), decreasing = TRUE)
+```
+
+```{r}
+data$borough <- as.factor(data$borough)
+```
+
+```{r}
+table(data$borough,useNA = "always")
+```
+
+### Frequency distribution of Borough 
+
+```{r}
+options(scipen=10000)
+ggplot(data=subset(data, !is.na(data$borough)), aes(x=borough))+geom_histogram(stat = "count",color="blue", fill="blue")+scale_y_continuous(breaks=c(100000,200000,300000),labels=c('100K','200K','300K'))+xlab("Major Cities of NY")+ylab("Number of Accidents")+theme_light()
+```
+
+```{r}
+#registering Google Static Map API key
+ggmap::register_google(key="AIzaSyBl1ERJg4Q6UUwsrdEPT7-iprbS9Zcm2z0")
+```
+
+```{r}
+## getting New York centered map
+p <- ggmap(get_googlemap(center = c(lon=-74.0060,lat=40.7128),
+                    zoom = 10, scale =2,
+                    maptype ='terrain'), color='color')
+```
+
+```{r}
+p + geom_point(data = subset(data, !is.na(data$latitude)& !is.na(data$longitude)),na.rm = T, aes(x = longitude, y = latitude,color=borough)) + geom_jitter()
+```
+
+```{r}
+ggsave("Nyaccidents.png", dpi=300)
+```
+
+
+```{r}
+##latitude and longitude cannot be zero for NY:
+## so replacing those 
+data$latitude[data$latitude==0] <- NA
+data$longitude[data$longitude==0] <- NA
+```
+
+```{r}
+p + geom_point(data = subset(data, (!is.na(data$latitude) & !is.na(data$longitude) & !is.na(data$borough))),na.rm = T, aes(x = longitude, y = latitude,color=borough)) + geom_jitter()
+```
+
+## Getting data only for Brooklyn:
+```{r}
+databrooklyn <- filter(data , borough=="BROOKLYN")
+```
+
+## Brooklyn Centered Map:
+```{r}
+brooklyn <- ggmap(get_googlemap(center = c(lon=-73.95,lat=40.655),
+                    zoom = 12, scale =2,
+                    maptype ='terrain'), color='color')
+```
+
+```{r}
+col1 = "#011f4b"
+brooklyn + geom_point(data = databrooklyn, aes(x = longitude, y = latitude), alpha=0.002, color=col1) + geom_jitter()
+ggsave("Brooklyn_accidents.png", dpi=300)
+```
+
+
+
+```{r}
+
+#frequency table for contributing factor 1
+brookcf1 <- as.data.frame(table(databrooklyn$contributing_factor_vehicle_1))
+colnames(brookcf1) <- c("cf1","freq")
+brookcf1 <- brookcf1 %>% arrange(desc(freq))
+
+#function for creating frequency tables:
+func_tabcf <- function(colname, newname){
+  temp <- as.data.frame(table(databrooklyn[,colname]))
+  colnames(temp) <- c(newname, "freq")
+  return(temp%>%arrange(desc(freq)))
+}
+
+#frequency table for contributing factor 2
+brookcf2 <- func_tabcf("contributing_factor_vehicle_2","cf2")
+#frequency table for contributing factor 3
+brookcf3 <- func_tabcf("contributing_factor_vehicle_3","cf3")
+#frequency table for contributing factor 4
+brookcf4 <- func_tabcf("contributing_factor_vehicle_4","cf4")
+#frequency table for contributing factor 5
+brookcf5 <- func_tabcf("contributing_factor_vehicle_5","cf5")
+
+
+#processing vehicle code:
+#converting vehicle code to upper case:
+databrooklyn$vehicle_type_code1 <- toupper(databrooklyn$vehicle_type_code1)
+databrooklyn$vehicle_type_code2 <- toupper(databrooklyn$vehicle_type_code2)
+databrooklyn$vehicle_type_code_3 <- toupper(databrooklyn$vehicle_type_code_3)
+databrooklyn$vehicle_type_code_4 <- toupper(databrooklyn$vehicle_type_code_4)
+databrooklyn$vehicle_type_code_5 <- toupper(databrooklyn$vehicle_type_code_5)
+
+#creating frequency tables for vehicle code from 1 to 5
+brookvc1 <- func_tabcf("vehicle_type_code1","vc1")
+brookvc2 <- func_tabcf("vehicle_type_code2","vc2")
+brookvc3 <- func_tabcf("vehicle_type_code_3","vc3")
+brookvc4 <- func_tabcf("vehicle_type_code_4","vc4")
+brookvc5 <- func_tabcf("vehicle_type_code_5","vc5")
+
+#creating frequency table for zipcode:
+brookzc <- func_tabcf("zip_code","zipcode")
+```
+
+```{r}
+## adding lat/lon to zipcodes using geocode api:
+brookzc$zipcode <- as.character(brookzc$zipcode)
+brookzc <- cbind(brookzc, geocode(brookzc$zipcode))
+```
+
+## overlaying top ten areas by zipcode where Brooklyn has accidents:
+```{r}
+brookzc$zipcode <- as.factor(brookzc$zipcode)
+
+brooklyn + geom_point(data = databrooklyn, aes(x = longitude, y = latitude, size=total_injured), alpha=0.002, color="blue") +
+  geom_point(aes(x = lon, y = lat, shape=zipcode, stroke = 2,size=2.5), colour="red", data = brookzc[1:10,]) + 
+  scale_shape_manual(values=1:nlevels(brookzc$zipcode))
+```
+
+```{r}
+#adding label/rank to zipcode
+brookzc$label <- paste(row.names(brookzc),brookzc$zipcode,sep=', ')
+colnames(brookzc)[2] <- "total accidents"
+
+brooklyn + geom_point(data = databrooklyn, aes(x = longitude, y = latitude), alpha=0.002, color="blue") +
+  geom_point(aes(x = lon, y = lat, stroke = 2,size=`total accidents`), colour="red", data = brookzc[1:15,]) + 
+   geom_label_repel(
+    aes(lon, lat, label = label),
+    data=brookzc[1:15,],
+    family = 'Arial', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'black')  + labs(size = "Accidents In Major Areas") +xlab("Longitude") + ylab("Latitude")
+ggsave("Brook_top10accbyzc.png", dpi=300) 
+```
+
+### histogram of zipcode vs number of accidents:
+```{r}
+ggplot(data=brookzc[1:15,], aes(x=reorder(zipcode,-`total accidents`),y=`total accidents`))+geom_bar(stat="identity",color="blue", fill="blue")+scale_y_continuous(breaks=c(10000,15000,20000),labels=c('10K','15K','20K'))+xlab("Zipcode")+ylab("Number of Accidents")+theme_light()
+```
+
+### histogram of hour of the day vs number of accidents
+```{r}
+ggplot(data=databrooklyn, aes(x=hour))+geom_histogram(stat="count",color="blue", fill="blue")+xlab("Hour of the Day")+ylab("Number of Accidents")+scale_x_continuous(breaks=seq(0,23,1))+theme_light()
+```
+
+```{r}
+#creating frequency table of hour
+brookhour <- func_tabcf("hour","hour")
+```
+
+### histogram of year vs number of accidents
+```{r}
+ggplot(data=databrooklyn, aes(x=year))+geom_histogram(stat="count",color="blue", fill="blue")+xlab("Year")+ylab("Number of Accidents")+scale_x_continuous(breaks=seq(2012,2019,1))+theme_light()
+```
+
+### histogram of month vs number of accidents
+```{r}
+ggplot(data=databrooklyn, aes(x=month))+geom_histogram(stat="count",color="blue", fill="blue")+xlab("Month")+ylab("Number of Accidents")+scale_x_continuous(breaks=seq(1,12,1))+theme_light()
+```
+
+### percentage of accidents during top 10 peak hours:
+```{r}
+sum(brookhour$freq[1:11])/sum(brookhour$freq);
+sum(brookhour$freq[1:11]);
+```
+
+### filtering brooklyn data by peak hours of accidents from 8 am to 6 pm:
+```{r}
+dat_brookpkhr <- subset(databrooklyn, databrooklyn$hour>=8 & databrooklyn$hour<=18)
+brookzcpkhr <- as.data.frame(table(dat_brookpkhr$zip_code))
+colnames(brookzcpkhr)[1] <- "zcpkhr"
+brookzcpkhr <- brookzcpkhr %>% arrange(desc(Freq))
+```
+```{r}
+zctop15pkhr <- brookzcpkhr$zcpkhr[1:15]
+zctop15all <- brookzc$zipcode[1:15]
+#note: zctop15pkhr and zctop15all are 93.33% same
+```
+
+```{r}
+## checking top 15 areas of zipcodes over total accidents during peak hours:
+sum(brookzcpkhr$`total accidents`[1:15])/sum(brookzcpkhr$`total accidents`);
+sum(brookzcpkhr$`total accidents`[1:15])
+sum(brookzcpkhr$`total accidents`);
+```
+
+##overlaying top 15 areas during peak hours by zipcode where Brooklyn has accidents:
+```{r}
+## adding lat/lon to zipcodes pk hour:
+brookzcpkhr$zcpkhr <- as.character(brookzcpkhr$zcpkhr)
+brookzcpkhr <- cbind(brookzcpkhr, geocode(brookzcpkhr$zcpkhr))
+
+#adding label/rank to zipcode pk hour
+brookzcpkhr$label <- paste(row.names(brookzcpkhr),brookzcpkhr$zcpkhr,sep=', ')
+colnames(brookzcpkhr)[2] <- "total accidents"
+
+brooklyn + geom_point(data = databrooklyn, aes(x = longitude, y = latitude), alpha=0.002, color="blue") +
+  geom_point(aes(x = lon, y = lat, stroke = 2,size=`total accidents`), colour="red", data = brookzcpkhr[1:15,]) + 
+   geom_label_repel(
+    aes(lon, lat, label = label),
+    data=brookzcpkhr[1:15,],
+    family = 'Calibri', 
+    size = 3, 
+    box.padding = 0.2, point.padding = 0.3,
+    segment.color = 'black')  + labs(size = "Accidents In Major Areas") +xlab("Longitude") + ylab("Latitude")
+ggsave("Brook_top15byzcpkhr.png", dpi=300) 
+```
+
+## Percentage of Accident Happen in Top 15 Areas during Peak Hour:
+```{r}
+sum(brookzcpkhr$`total accidents`[1:15])/sum(brookzcpkhr$`total accidents`);
+sum(brookzcpkhr$`total accidents`[1:15]);
+sum(brookzcpkhr$`total accidents`);
+```
+
+## Analyzing factors which are main causes of accidents:
+```{r}
+func_freq_desc <- function(data,colname,newname){
+  temp <- as.data.frame(table(data[,colname]))
+  colnames(temp) <- c(newname, "freq")
+  return(temp%>%arrange(desc(freq)))
+} 
+
+brookcf1pkhr <- func_freq_desc(dat_brookpkhr,"contributing_factor_vehicle_1","cf1pk")
+brookcf2pkhr <- func_freq_desc(dat_brookpkhr,"contributing_factor_vehicle_2","cf2pk")
+brookcf3pkhr <- func_freq_desc(dat_brookpkhr,"contributing_factor_vehicle_3","cf3pk")
+brookcf4pkhr <- func_freq_desc(dat_brookpkhr,"contributing_factor_vehicle_4","cf4pk")
+brookcf5pkhr <- func_freq_desc(dat_brookpkhr,"contributing_factor_vehicle_5","cf5pk")
+#major causes of accidents for vehicle one
+sum(brookcf1pkhr$freq[2:21])/sum(brookcf1pkhr$freq)
+```
+
+
+## Grouping causes/factors of accidents into 8(including unspecified) main categories
+- Driving Mistakes
+- Vehicle Problems
+- Route Defects
+- Health
+- Breaking Rules
+- Other
+- Distraction
+- Unspecified
+
+```{r}
+## loading data which contains this factors categories:
+cf6cat <- xlsx::read.xlsx(file = "data/eda.xlsx", sheetIndex = 1, encoding = "UTF-8")
+datamaster <- databrooklyn
+colnames(cf6cat)[1] <- "contributing_factor_vehicle_1"
+cf6cat$contributing_factor_vehicle_1 <- as.character(cf6cat$contributing_factor_vehicle_1)
+databrooklynnew <- join_all(list(databrooklyn,cf6cat),by="contributing_factor_vehicle_1",type="left")
+table(databrooklynnew$CFType)
+```
+
+```{r}
+### checking why it was not merging properly
+if (str_sub(databrooklynnew$contributing_factor_vehicle_1[16],28,n)==str_sub(cf6cat$contributing_factor_vehicle_1[46],28,n)){print(str_sub(databrooklynnew$contributing_factor_vehicle_1[16],28,n));
+  print((databrooklynnew$contributing_factor_vehicle_1[16]))
+  print(cf6cat$contributing_factor_vehicle_1[46]); print("true")}
+```
+
+```{r}
+## Removing white spaces in contributing factor
+databrooklyn$cfv1 <- str_replace_all(databrooklyn$contributing_factor_vehicle_1,"\\s","")
+databrooklyn$cfv2 <- str_replace_all(databrooklyn$contributing_factor_vehicle_2,"\\s","")
+databrooklyn$cfv3 <- str_replace_all(databrooklyn$contributing_factor_vehicle_3,"\\s","")
+databrooklyn$cfv4 <- str_replace_all(databrooklyn$contributing_factor_vehicle_4,"\\s","")
+databrooklyn$cfv5 <- str_replace_all(databrooklyn$contributing_factor_vehicle_5,"\\s","")
+```
+
+```{r}
+## loading again:
+databrooklynnew <-NULL
+## processing for contributing factor 1:
+cf6cat$cfv1 <- str_replace_all(cf6cat$contributing_factor_vehicle_1,"\\s","")
+colnames(cf6cat)[2] <- "cftype1"
+databrooklynnew <- join_all(list(databrooklyn,cf6cat),by="cfv1",type="left")
+table(databrooklynnew$cftype1,useNA="always")
+```
+
+
+```{r}
+#processing for contributing factor 2
+cf6cat$cfv2 <- str_replace_all(cf6cat$contributing_factor_vehicle_1,"\\s","")
+colnames(cf6cat)[2]<- "cftype2"
+databrooklynnew <- join_all(list(databrooklynnew,cf6cat),by="cfv2",type="left")
+table(databrooklynnew$cftype2,useNA="always")
+```
+
+```{r}
+#processing for contributing factor 3
+cf6cat$cfv3 <- str_replace_all(cf6cat$contributing_factor_vehicle_1,"\\s","")
+colnames(cf6cat)[2]<- "cftype3"
+databrooklynnew <- join_all(list(databrooklynnew,cf6cat),by="cfv3",type="left")
+table(databrooklynnew$cftype3,useNA="always")
+```
+
+
+```{r}
+#processing for contributing factor 4
+cf6cat$cfv4 <- str_replace_all(cf6cat$contributing_factor_vehicle_1,"\\s","")
+colnames(cf6cat)[2]<- "cftype4"
+databrooklynnew <- join_all(list(databrooklynnew,cf6cat),by="cfv4",type="left")
+table(databrooklynnew$cftype4,useNA="always")
+```
+
+
+```{r}
+#processing for contributing factor 5
+cf6cat$cfv5 <- str_replace_all(cf6cat$contributing_factor_vehicle_1,"\\s","")
+colnames(cf6cat)[2]<- "cftype5"
+databrooklynnew <- join_all(list(databrooklynnew,cf6cat),by="cfv5",type="left")
+table(databrooklynnew$cftype5,useNA="always")
+```
+
+```{r}
+## subsetting the columns which are required:
+databrooklynnew <- databrooklynnew[,c("unique_key","cftype1","cftype2","cftype3","cftype4","cftype5")]
+```
+
+```{r}
+## merging it with databrooklyn:
+databrooklynnew <- join_all(list(databrooklyn,databrooklynnew),by="unique_key",type="inner")
+```
+
+### Histogram of cftype1 vs number of accidents for all Brooklyn
+```{r}
+ggplot(data=subset(databrooklynnew,!is.na(databrooklynnew$cftype1)&databrooklynnew$cftype1!="Unspecified"), aes(x=cftype1))+geom_bar(stat="count",color="blue", fill="blue")+xlab("Vehicle 1 Contributing Factor ")+ylab("Number of Accidents")+theme(axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1))+
+    geom_text(
+   stat='count', aes(label=paste0(round(..count../sum(..count..)*100),'%')), vjust=-0.1
+  )+ggtitle("                Number of Accidents by Vehicle 1 Contributing Factor ")
+ggsave("cftype1.png")
+```
+
+```{r}
+nrow(subset(databrooklynnew,!is.na(databrooklynnew$cftype1)&databrooklynnew$cftype1!="Unspecified"))
+```
+
+### Histogram of cftype2 vs number of accidents for all Brooklyn
+```{r}
+ggplot(data=subset(databrooklynnew,!is.na(databrooklynnew$cftype2)&databrooklynnew$cftype2!="Unspecified"), aes(x=cftype2))+geom_bar(stat="count",color="blue", fill="blue")+xlab("Vehicle 2 Contributing Factor ")+ylab("Number of Accidents")+theme(axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1))+
+    geom_text(
+   stat='count', aes(label=paste0(round(..count../sum(..count..)*100),'%')), vjust=-0.1
+  )+ggtitle("                Number of Accidents by Vehicle 2 Contributing Factor ")
+ggsave("cftype2.png")
+```
+
+
+#Histogram of cftype3 vs number of accidents for all Brooklyn
+```{r}
+ggplot(data=subset(databrooklynnew,!is.na(databrooklynnew$cftype3)&databrooklynnew$cftype3!="Unspecified"), aes(x=cftype3))+geom_bar(stat="count",color="blue", fill="blue")+xlab("Vehicle 3 Contributing Factor ")+ylab("Number of Accidents")+theme(axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1))+
+    geom_text(
+   stat='count', aes(label=paste0(round(..count../sum(..count..)*100),'%')), vjust=-0.1
+  )+ggtitle("                Number of Accidents by Vehicle 3 Contributing Factor ")
+ggsave("cftype3.png")
+```
+
+
+```{r}
+## grouping by cftype 1 and cftype2 separately:
+databrooklynnew%>%dplyr::group_by(cftype1)%>%tally();
+databrooklynnew%>%dplyr::group_by(cftype2)%>%tally();
+```
+
+```{r}
+databrooklynnew%>%dplyr::group_by(cftype1,cftype2)%>%tally()
+```
+
+### looking at the relationship between cftype1 and cftype2:
+```{r}
+top81 <- c('Breaking Rules','Distraction/Inattention','Driving Mistakes','Health','Route Defects','Vehicle Problems','Other')
+subset(databrooklynnew, databrooklynnew$cftype1 %in% top81 & databrooklynnew$cftype2 %in% top81) %>% 
+  select(cftype1,cftype2,unique_key) %>% 
+  dplyr::group_by(cftype1,cftype2) %>% 
+  dplyr::summarise(total=n())%>%
+  spread(cftype2,total)
+```
+
+```{r}
+cftype1 <- func_freq_desc(databrooklynnew,"cftype1","cftype1")
+#add percentage column
+cftype1 <- cftype1%>%mutate(percentall = freq/sum(freq)*100)
+```
+
+### Contributing Factor Type Association 1 with Injury/Deaths for overall
+```{r}
+graphdicf1 <- databrooklynnew[(!is.na(databrooklynnew$cftype1) & databrooklynnew$cftype1!="Unspecified"),]%>%group_by(cftype1)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+
+```{r}
+
+scaleFactor <- max(graphdicf1$total_injured) / max(graphdicf1$total_killed)
+plotdicf1 <- ggplot(graphdicf1, aes(x=cftype1,  width=.4)) +
+  geom_col(aes(y=total_injured), fill="blue", position = position_nudge(x = -.4)) +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_injured),"%"),y = total_injured), vjust=-0.1,nudge_x = -0.38
+  )+
+  geom_col(aes(y=total_killed*scaleFactor), fill="red") +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_killed),"%"),y = total_killed*scaleFactor), vjust=-0.1,nudge_x = 0.1
+  )+
+  scale_y_continuous(name="Total Injured", sec.axis=sec_axis(~./scaleFactor, name="Total Killed")) +
+  theme(
+    axis.title.y.left=element_text(color="blue"),
+    axis.text.y.left=element_text(color="blue"),
+    axis.title.y.right=element_text(color="red"),
+    axis.text.y.right=element_text(color="red"),axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1)
+  ) + 
+  labs(title = "       Total Persons Injured and Killed vs Contributing Factor Vechicle 1")+xlab("Vehicle 1 Contributing Factor")
+plotdicf1
+#ggsave("deathinjuredcf1.png")
+```
+
+
+### Contributing Factor Type Association 2 with Injury/Deaths for overall
+```{r}
+graphdicf2 <- databrooklynnew[(!is.na(databrooklynnew$cftype2) & databrooklynnew$cftype2!="Unspecified"),]%>%group_by(cftype2)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+```{r}
+scaleFactor <- max(graphdicf2$total_injured) / max(graphdicf1$total_killed)
+ggplot(graphdicf2, aes(x=cftype2,  width=.4)) +
+  geom_col(aes(y=total_injured), fill="blue", position = position_nudge(x = -.4)) +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_injured),"%"),y = total_injured), vjust=-0.1,nudge_x = -0.38
+  )+
+  geom_col(aes(y=total_killed*scaleFactor), fill="red") +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_killed),"%"),y = total_killed*scaleFactor), vjust=-0.1,nudge_x = 0.1
+  )+
+  scale_y_continuous(name="Total Injured", sec.axis=sec_axis(~./scaleFactor, name="Total Killed")) +
+  theme(
+    axis.title.y.left=element_text(color="blue"),
+    axis.text.y.left=element_text(color="blue"),
+    axis.title.y.right=element_text(color="red"),
+    axis.text.y.right=element_text(color="red"),axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1)
+  ) + 
+  labs(title = "       Total Persons Injured and Killed vs Contributing Factor Vechicle 2")+xlab("Vehicle 2 Contributing Factor")
+#ggsave("deathinjuredcf2.png")
+
+```
+
+
+```{r}
+##replacing same car type different names to same names
+databrooklynnew$vehicle_type_code1 <- str_replace(databrooklynnew$vehicle_type_code1,"SPORT UTILITY / STATION WAGON","SPORTS CAR/STATION WAGON")
+databrooklynnew$vehicle_type_code1 <- str_replace(databrooklynnew$vehicle_type_code1,"STATION WAGON/SPORT UTILITY VEHICLE","SPORTS CAR/STATION WAGON")
+databrooklynnew$vehicle_type_code2 <- str_replace(databrooklynnew$vehicle_type_code2,"SPORT UTILITY / STATION WAGON","SPORTS CAR/STATION WAGON")
+databrooklynnew$vehicle_type_code2 <- str_replace(databrooklynnew$vehicle_type_code2,"STATION WAGON/SPORT UTILITY VEHICLE","SPORTS CAR/STATION WAGON")
+```
+
+### subsetting databrooklyn containing only those vehicles which have top 15 vehicles:
+```{r}
+### Note: Top 15 vehicles in peak hour are same as overall 
+brookvc1 <- func_freq_desc(databrooklynnew,"vehicle_type_code1","vc1")
+```
+
+
+```{r}
+## Note from above: Sports Utility Vehcicle are the second highest to have distractions, driving mistakes, breaking rules, other, route defects, unspecified:
+#SPORT UTILITY / STATION WAGON same as below                 
+# STATION WAGON/SPORT UTILITY VEHICLE
+```
+
+```{r}
+#Top 5 percentage in overall excluding other types:
+(sum(brookvc1$freq[1:6])-6784)/(sum(brookvc1$freq))
+```
+
+### Subsetting brookylndata containing top 5 vehicle code1:
+```{r}
+top5vc1 <- brookvc1$vc1[1:6]
+top5vc1 <- top5vc1[-4]
+databrooktop5vc1 <- subset(databrooklynnew, databrooklynnew$vehicle_type_code1 %in% top5vc1)
+table(databrooktop5vc1$vehicle_type_code1,databrooktop5vc1$cftype1)
+
+```
+
+### Relationship between top5vc1 and cftype1:
+```{r}
+summarycf1vc1 <- databrooktop5vc1[(!is.na(databrooktop5vc1$cftype1) &       databrooktop5vc1$cftype1!="Unspecified"),]%>%group_by(cftype1,vehicle_type_code1)%>%
+  dplyr::summarise(n=n())%>%spread(cftype1,value = n)%>%arrange(desc(`Breaking Rules`))%>%
+  mutate(BRpercent=round(`Breaking Rules`/sum(`Breaking Rules`)*100,2))%>%
+  mutate(DIpercent=round(`Distraction/Inattention`/sum(`Distraction/Inattention`)*100,2))%>%
+  mutate(DMpercent=round(`Driving Mistakes`/sum(`Driving Mistakes`)*100,2))%>%
+  mutate(Hpercent=round(`Health`/sum(`Health`)*100,2))%>%
+  mutate(Opercent=round(`Other`/sum(`Other`)*100,2))%>%
+  mutate(RDpercent=round(`Route Defects`/sum(`Route Defects`)*100,2))%>%
+  mutate(VPpercent=round(`Vehicle Problems`/sum(`Vehicle Problems`)*100,2))
+
+  summarycf1vc1[,2:ncol(summarycf1vc1)] = apply(summarycf1vc1[,2:ncol(summarycf1vc1)], 2, function(x) as.character(x))
+  for ( i in 1:nrow(summarycf1vc1)) {
+    
+    for ( j in 2:8){
+     summarycf1vc1[i,j] <- paste(summarycf1vc1[i,j]," (",trimws(summarycf1vc1[i,7+j],"both"),"%)",sep = "") 
+    }
+    }
+  summarycf1vc1[,c(9:ncol(summarycf1vc1))] <- NULL
+```
+
+### vehicle 1 vs contributing factor type 2:
+```{r}
+table(databrooktop5vc1$vehicle_type_code1,databrooktop5vc1$cftype2)
+```
+
+### vehicle code 1 Association with Injury/Deaths for overall:
+```{r}
+databrooktop5vc1[!is.na(databrooktop5vc1$vehicle_type_code1),]%>%group_by(vehicle_type_code1)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+### vehcicle code 2 Association with Injury/Deaths for overall:
+```{r}
+databrooktop5vc1[!is.na(databrooktop5vc1$vehicle_type_code2),]%>%group_by(vehicle_type_code2)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+### Relationship between vehicle code 2 and vehicle code 1 for data subset: databrooklyntop5vc1:
+```{r}
+table(databrooktop5vc2$vehicle_type_code1,databrooktop5vc2$vehicle_type_code2)
+```
+
+```{r}
+### Probability of contributing factor type 1 having an accident with another vehicle (vehicle code 2)
+table(databrooktop5vc1$cftype1,databrooktop5vc1$vehicle_type_code2)
+```
+
+### Subsetting brookylndata containing top 5 vehicle code2:
+```{r}
+brookvc2 <- func_freq_desc(databrooklynnew, "vehicle_type_code2" , "vc2")
+top5vc2 <- brookvc2$vc2[1:7];
+top5vc2 <- top5vc2[-c(3,6)];
+top5vc2;
+databrooktop5vc2 <- subset(databrooklynnew, databrooklynnew$vehicle_type_code2 %in% top5vc2)
+```
+
+### Relationship between top5vc2 vs cftype1
+```{r}
+summarycf1vc2 <- databrooktop5vc2[(!is.na(databrooktop5vc2$cftype1) &       databrooktop5vc2$cftype1!="Unspecified"),]%>%group_by(cftype1,vehicle_type_code2)%>%
+  dplyr::summarise(n=n())%>%spread(cftype1,value = n)%>%arrange(desc(`Breaking Rules`))%>%
+  mutate(BRpercent=round(`Breaking Rules`/sum(`Breaking Rules`)*100,2))%>%
+  mutate(DIpercent=round(`Distraction/Inattention`/sum(`Distraction/Inattention`)*100,2))%>%
+  mutate(DMpercent=round(`Driving Mistakes`/sum(`Driving Mistakes`)*100,2))%>%
+  mutate(Hpercent=round(`Health`/sum(`Health`)*100,2))%>%
+  mutate(Opercent=round(`Other`/sum(`Other`)*100,2))%>%
+  mutate(RDpercent=round(`Route Defects`/sum(`Route Defects`)*100,2))%>%
+  mutate(VPpercent=round(`Vehicle Problems`/sum(`Vehicle Problems`)*100,2))
+
+ summarycf1vc2[,2:ncol(summarycf1vc2)] = apply(summarycf1vc2[,2:ncol(summarycf1vc2)], 2, function(x) as.character(x))
+
+  for ( i in 1:nrow(summarycf1vc2)) {
+    
+    for ( j in 2:8){
+      
+     summarycf1vc2[i,j] <- paste(summarycf1vc2[i,j]," (",trimws(summarycf1vc2[i,7+j],"both"),"%)",sep = "") 
+    }
+  }
+ 
+  summarycf1vc2[,c(9:ncol(summarycf1vc2))] <- NULL
+  
+```
+
+### Subsetting data containing top 5 vehicle code for 1 and 2
+```{r}
+databrooktop5vc1vc2 <- subset(databrooklynnew, databrooklynnew$vehicle_type_code1 %in% top5vc1 & databrooklynnew$vehicle_type_code2 %in% top5vc2)
+```
+
+### relationship between vehicle code 1 and vehicle code 2
+```{r}
+summaryvc1vc2 <- databrooktop5vc1vc2%>%dplyr::group_by(vehicle_type_code1,vehicle_type_code2)%>%
+  dplyr::summarise(n=n())%>%
+  spread(vehicle_type_code1,n)%>%
+  arrange(desc(`SPORTS CAR/STATION WAGON`))%>%
+  mutate(PVperent=round(`PASSENGER VEHICLE`/sum(`PASSENGER VEHICLE`,na.rm = T)*100,2))%>%
+  mutate(PUTpercent=round(`PICK-UP TRUCK`/sum(`PICK-UP TRUCK`,na.rm = T)*100,2))%>%
+  mutate(Spercent=round(`SEDAN`/sum(`SEDAN`,na.rm = T)*100,2))%>%
+  mutate(Sportpercent=round(`SPORTS CAR/STATION WAGON`/sum(`SPORTS CAR/STATION WAGON`,na.rm = T)*100,2))%>%
+  mutate(Vpercent=round(`VAN`/sum(`VAN`,na.rm = T)*100,2))
+  
+ summaryvc1vc2[,2:ncol(summaryvc1vc2)] = apply(summaryvc1vc2[,2:ncol(summaryvc1vc2)], 2, function(x) as.character(x))
+
+  for ( i in 1:nrow(summaryvc1vc2)) {
+    for ( j in 2:6){
+     summaryvc1vc2[i,j] <- paste(summaryvc1vc2[i,j]," (",trimws(summaryvc1vc2[i,5+j],"both"),"%)",sep = "") 
+    }
+  }
+  summaryvc1vc2[,c(7:ncol(summaryvc1vc2))] <- NULL
+  summaryvc1vc2 <- summaryvc1vc2[,c(1,5,2,4,6,3)]
+```
+
+
+### grouping top5vc1 by vc1 and summarizing total injured and total killed:
+```{r}
+databrooktop5vc1%>%dplyr::group_by(vehicle_type_code1)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+### grouping top5vc2 by vc2 and summarizing total injured and total killed:
+```{r}
+databrooktop5vc2%>%dplyr::group_by(vehicle_type_code2)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured))%>%
+  mutate(percent_injured=total_injured/sum(total_injured)*100)%>%
+  mutate(percent_killed=total_killed/sum(total_killed)*100)
+```
+
+### grouping top5vc1vc2 by vc1 and vc2 and summarizing total injured and total killed:
+### Basically pairing top5 vehicle code 1 with top 5 vehicle code 2:
+```{r}
+summarydivc1vc2 <- databrooktop5vc1vc2%>%dplyr::group_by(vehicle_type_code1,vehicle_type_code2)%>%
+  dplyr::summarise(total_injured=sum(total_injured,na.rm = T),total_killed=sum(total_killed,na.rm = T))%>%  
+  dplyr::arrange(desc(total_injured),desc(total_killed))%>%
+  mutate(percent_injured=round(total_injured/sum(total_injured)*100,2))%>%
+  mutate(percent_killed=round(total_killed/sum(total_killed)*100,2))
+
+ summarydivc1vc2[,3:ncol(summarydivc1vc2)] = apply(summarydivc1vc2[,3:ncol(summarydivc1vc2)], 2, function(x) as.character(x))
+
+  for ( i in 1:nrow(summarydivc1vc2)) {
+    for ( j in 3:4){
+     summarydivc1vc2[i,j] <- paste(summarydivc1vc2[i,j]," (",trimws(summarydivc1vc2[i,2+j],"both"),"%)",sep = "") 
+    }
+  }
+ summarydivc1vc2[,c(5:ncol(summarydivc1vc2))] <- NULL
+```
+
+### subsettting top 10 pariring of vc1 and vc2:
+```{r}
+summarydivc1vc2 <- summarydivc1vc2[1:10,]
+summarydivc1vc2$vehicle_type_code1 <- str_replace(summarydivc1vc2$vehicle_type_code1,"PASSENGER VEHICLE","PV1")
+summarydivc1vc2$vehicle_type_code2 <- str_replace(summarydivc1vc2$vehicle_type_code2,"PASSENGER VEHICLE","PV2")
+summarydivc1vc2$vehicle_type_code1 <- str_replace(summarydivc1vc2$vehicle_type_code1,"SPORTS CAR/STATION WAGON","SCSW1")
+summarydivc1vc2$vehicle_type_code2 <- str_replace(summarydivc1vc2$vehicle_type_code2,"SPORTS CAR/STATION WAGON","SCSW2")
+summarydivc1vc2$vehicle_type_code1 <- str_replace(summarydivc1vc2$vehicle_type_code1,"SEDAN","SEDAN1")
+summarydivc1vc2$vehicle_type_code2 <- str_replace(summarydivc1vc2$vehicle_type_code2,"SEDAN","SEDAN2")
+summarydivc1vc2$vehicle_type_code2 <- str_replace(summarydivc1vc2$vehicle_type_code2,"BICYCLE","BICYCLE2")
+summarydivc1vc2$vehicle_type_code2 <- str_replace(summarydivc1vc2$vehicle_type_code2,"VAN","VAN2")
+```
+
+
+### Histogram of pairing of vc1 and vc2, showing total injured and total killed:
+```{r}
+summarydivc1vc2$vc1vc2 <- paste0(summarydivc1vc2$vehicle_type_code1,"-",summarydivc1vc2$vehicle_type_code2)
+scaleFactor <- max(summarydivc1vc2$total_injured) / max(summarydivc1vc2$total_killed)
+ggplot(summarydivc1vc2, aes(x=vc1vc2,  width=.4)) +
+  geom_col(aes(y=total_injured), fill="blue", position = position_nudge(x = -.4)) +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_injured),"%"),y = total_injured), vjust=-0.1,nudge_x = -0.38
+  )+
+  geom_col(aes(y=total_killed*scaleFactor), fill="red") +
+  geom_text(
+   stat='identity', aes(label=paste0(round(percent_killed),"%"),y = total_killed*scaleFactor), vjust=-0.1,nudge_x = 0.1
+  )+
+  scale_y_continuous(name="Total Injured", sec.axis=sec_axis(~./scaleFactor, name="Total Killed")) +
+  theme(
+    axis.title.y.left=element_text(color="blue"),
+    axis.text.y.left=element_text(color="blue"),
+    axis.title.y.right=element_text(color="red"),
+    axis.text.y.right=element_text(color="red"),axis.text.x=element_text(family = "Times",angle=30,hjust=1,vjust=1)
+  ) + 
+  labs(title = "Total Persons Injured and Killed when Vehicle Type1 hits another Vehicle Type 2")+xlab("Vehicle Type 1 - Vehicle Type 2")
+ggsave("deathinjuredvc1vc2.png")
+```
+
+
+
