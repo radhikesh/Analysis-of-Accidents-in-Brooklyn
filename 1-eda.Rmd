@@ -54,7 +54,7 @@ ggplot(data=subset(data, !is.na(data$borough)), aes(x=borough))+geom_histogram(s
 
 ```{r}
 #registering Google Static Map API key
-ggmap::register_google(key="AIzaSyBl1ERJg4Q6UUwsrdEPT7-iprbS9Zcm2z0")
+ggmap::register_google(key="**************")
 ```
 
 ```{r}
